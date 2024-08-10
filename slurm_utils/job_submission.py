@@ -1,151 +1,102 @@
 import os
 import subprocess
 import logging
-import time
 import sys
-from typing import Dict, Any, Optional
+import time
+import itertools
+import functools
+from typing import Dict, Any, Optional, List, Union, Tuple
+import threading
+import random
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-def get_value(key: str, args: Dict[str, Any], default: Optional[str] = None) -> str:
-    """Get value from args or environment variables."""
-    value = args.get(key) or os.environ.get(f"SLURM_{key.upper()}")
-    if value is None and default is None:
-        raise ValueError(f"Missing required argument: {key}")
-    return value or default
 
 def submit_job(
     job_name: str,
     partition: str,
+    script_path: str,
     output: str = "job_logs/R-%x.%A_%a.out",
     error: str = "job_logs/R-%x.%A_%a.err",
-    time: str = "01:00:00",
+    time_limit: str = "01:00:00",
     account: Optional[str] = None,
     nodes: int = 1,
     ntasks_per_node: int = 1,
     cpus_per_task: int = 1,
     mem: str = "0",
-    network: Optional[str] = None,
     array: Optional[str] = None,
-    script_content: str = "",
-    **kwargs
+    dependency: Optional[str] = None,
+    additional_params: Optional[Dict[str, Any]] = None
 ) -> str:
-    """
-    Generate an sbatch script based on the provided arguments.
-    """
-    sbatch_options = {
-        "job-name": job_name,
-        "partition": partition,
-        "output": output,
-        "error": error,
-        "time": time,
-        "account": account,
-        "nodes": nodes,
-        "ntasks-per-node": ntasks_per_node,
-        "cpus-per-task": cpus_per_task,
-        "mem": mem,
-        "network": network,
-        "array": array,
-    }
+    """Submit a job to SLURM."""
+    if not partition:
+        raise ValueError("Partition must be specified for job submission")
 
-    # Update with any additional kwargs
-    sbatch_options.update(kwargs)
+    sbatch_options = [
+        f"--job-name={job_name}",
+        f"--partition={partition}",
+        f"--output={output}",
+        f"--error={error}",
+        f"--time={time_limit}",
+        f"--nodes={nodes}",
+        f"--ntasks-per-node={ntasks_per_node}",
+        f"--cpus-per-task={cpus_per_task}",
+        f"--mem={mem}",
+    ]
 
-    # Generate the sbatch script
-    script = "#!/bin/bash\n"
-    for key, value in sbatch_options.items():
-        if value is not None:
-            script += f"#SBATCH --{key}={value}\n"
+    if account:
+        sbatch_options.append(f"--account={account}")
+    if array:
+        sbatch_options.append(f"--array={array}")
+    if dependency:
+        sbatch_options.append(f"--dependency={dependency}")
+    if additional_params:
+        for key, value in additional_params.items():
+            sbatch_options.append(f"--{key}={value}")
 
-    # Add the actual script content
-    script += "\n" + script_content
+    return _submit_job_to_slurm(script_path, sbatch_options)
 
-    return script
-
-def ensure_directory_exists(directory):
-    """Ensure that the specified directory exists."""
-    os.makedirs(directory, exist_ok=True)
-
-def get_job_id_from_submission(submission_output: str) -> str:
-    """Extract job ID from sbatch submission output."""
-    return submission_output.strip().split()[-1]
-
-def write_sbatch_script(script: str, job_name: str) -> str:
-    """
-    Write the generated sbatch script to a file in the job_logs directory.
-
-    Args:
-        script (str): The generated sbatch script
-        job_name (str): Name of the job
-
-    Returns:
-        str: The path to the saved script file
-    """
-    ensure_directory_exists("job_logs")
-    filename = f"job_logs/{job_name}_script.sh"
-    with open(filename, "w") as f:
-        f.write(script)
-    return os.path.abspath(filename)
-
-def submit_job_to_slurm(script_path: str) -> str:
-    """
-    Submit the job script to SLURM and return the job ID.
-
-    Args:
-        script_path (str): Path to the sbatch script file
-
-    Returns:
-        str: The job ID returned by SLURM
-
-    Raises:
-        RuntimeError: If the job submission fails
-    """
+def _submit_job_to_slurm(script_path: str, sbatch_options: List[str]) -> str:
+    """Submit the job script to SLURM and return the job ID."""
     logger.info(f"Submitting job script: {script_path}")
     
     try:
-        result = subprocess.run(['sbatch', script_path], capture_output=True, text=True, check=True)
-        logger.info(f"Job submission output: {result.stdout}")
-        job_id = get_job_id_from_submission(result.stdout)
-        return job_id
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to submit job. Return code: {e.returncode}")
-        logger.error(f"Error output: {e.stderr}")
-        raise RuntimeError(f"Failed to submit job: {e.stderr}")
-    except Exception as e:
-        logger.error(f"Unexpected error during job submission: {str(e)}")
-        raise RuntimeError(f"Unexpected error during job submission: {str(e)}")
+        if not os.path.exists(script_path):
+            raise FileNotFoundError(f"Script file not found: {script_path}")
 
-def get_job_state(job_id: str) -> str:
-    """
-    Get the current state of a job.
+        if not os.access(script_path, os.R_OK):
+            raise PermissionError(f"Script file is not readable: {script_path}")
+        while True:
+            try:
+                cmd = ["sbatch"] + sbatch_options + [script_path]
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                logger.info(f"Job submission output: {result.stdout}")
+                return result.stdout.strip().split()[-1]
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error during job submission: {e.stderr}. Will sleep 1m and try again.")
+                time.sleep(60)
+    except (FileNotFoundError, PermissionError) as e:
+        logger.error(f"Error during job submission: {str(e)}")
+        raise RuntimeError(f"Failed to submit job: {str(e)}")
 
-    Args:
-        job_id (str): The ID of the job to check
-
-    Returns:
-        str: The current state of the job
-    """
+def get_job_state(job_id: str) -> List[Tuple[str, str]]:
+    """Get the current state of a job."""
     try:
         result = subprocess.run(['scontrol', 'show', 'job', job_id], capture_output=True, text=True, check=True)
         for line in result.stdout.split('\n'):
-            if line.strip().startswith('JobState='):
-                # Extract only the state, not the reason
-                return line.strip().split('=')[1].split()[0]
+            line = line.strip()
+            if line.startswith('JobState='):
+                current_state = line.split('=')[1].split()[0]
+                return current_state
+
+        # If no states were found, return UNKNOWN
         return "UNKNOWN"
+
     except subprocess.CalledProcessError:
         return "UNKNOWN"
 
 def parse_time_limit(time_limit: str) -> int:
-    """
-    Parse the time limit string and return the total seconds.
-
-    Args:
-        time_limit (str): Time limit in the format 'DD-HH:MM:SS', 'HH:MM:SS', 'MM:SS', or 'SS'
-
-    Returns:
-        int: Total seconds
-    """
+    """Parse the time limit string and return the total seconds."""
     parts = time_limit.replace('-', ':').split(':')
     parts = [int(part) for part in parts]
     
@@ -160,106 +111,207 @@ def parse_time_limit(time_limit: str) -> int:
     else:
         raise ValueError(f"Invalid time limit format: {time_limit}")
 
-
-def start_background_monitoring(script_path: str, time_limit: str, max_resubmissions: int, log_file: str, job_name: str):
-    """
-    Start the job monitoring process in the background.
-
-    Args:
-        script_path (str): Path to the sbatch script file
-        time_limit (str): Time limit of the job
-        max_resubmissions (int): Maximum number of resubmissions allowed
-        log_file (str): Path to the log file for background process output
-        job_name (str): Name of the job
-    """
-    current_script = os.path.abspath(sys.argv[0])
-    cmd = [
-        "nohup", sys.executable, current_script, "background-monitor",
-        "--script-path", script_path,
-        "--time-limit", time_limit,
-        "--max-resubmissions", str(max_resubmissions),
-        "--job-name", job_name,
-        f">> {log_file} 2>&1 &"
-    ]
-    
-    subprocess.Popen(" ".join(cmd), shell=True, env=os.environ.copy())
-    logger.info(f"Started background monitoring process. Check {log_file} for output.")
-
-
-def background_monitor(script_path: str, time_limit: str, max_resubmissions: int, job_name: str):
-    """
-    Function to be run in the background for monitoring and resubmitting jobs.
-
-    Args:
-        script_path (str): Path to the sbatch script file
-        time_limit (str): Time limit of the job
-        max_resubmissions (int): Maximum number of resubmissions allowed
-        job_name (str): Name of the job
-    """
-    logger.info(f"Starting background job monitoring for job: {job_name}")
-    monitor_and_resubmit_job(script_path, time_limit, max_resubmissions)
-    logger.info(f"Background job monitoring completed for job: {job_name}")
-
-def monitor_and_resubmit_job(script_path: str, time_limit: str, max_resubmissions: int) -> None:
-    """
-    Monitor a job and resubmit it if it exits before the time limit.
-
-    Args:
-        script_path (str): Path to the sbatch script file
-        time_limit (str): Time limit of the job
-        max_resubmissions (int): Maximum number of resubmissions allowed
-    """
+def monitor_and_resubmit_job(job_id: int, task_id: int, time_limit: str, max_resubmissions: int, submit_fn) -> None:
+    """Monitor a job and resubmit it if it exits before the time limit."""
     resubmissions = 0
     time_limit_seconds = parse_time_limit(time_limit)
     
     while resubmissions <= max_resubmissions:
         start_time = time.time()
-        job_id = submit_job_to_slurm(script_path)
-        logger.info(f"Job submitted with ID: {job_id}")
-
         while True:
-            time.sleep(4)  # Check every minute
-            current_state = get_job_state(job_id)
+            time.sleep(5)
             elapsed_time = time.time() - start_time
-            print(f"Checking: {current_state}")
-            if current_state in ['COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT']:
-                if elapsed_time < time_limit_seconds:
-                    resubmissions += 1
-                    logger.info(f"Job {job_id} ended prematurely. Resubmitting (attempt {resubmissions}).")
-                    break
+            job_state = get_job_state(f"{job_id}_{task_id}")
+            if job_state != "RUNNING":  
+                if elapsed_time < time_limit_seconds and job_state != "COMPLETED":
+                    logger.info(f"Job {job_id}, Task id {task_id} ended prematurely. Resubmitting (attempt {resubmissions}).")
+                    job_id = submit_fn(array=f"{task_id}-{task_id}")
+                    logger.info(f"Job submitted with ID: {job_id}")
                 else:
-                    logger.info(f"Job {job_id} completed after running for the full time limit.")
+                    logger.info(f"Job {job_id}, Task id {task_id} finished normally")
                     return
-            elif current_state == 'UNKNOWN':
-                logger.error(f"Unable to determine state of job {job_id}. Stopping monitoring.")
-                return
 
-        if resubmissions > max_resubmissions:
-            logger.info(f"Reached maximum number of resubmissions ({max_resubmissions}). Stopping.")
-            return
+def get_array_job_info(job_id: int) -> Dict[str, str]:
+    """Get the state of each task in an array job.
+    Args:
+        job_id (int): Job ID of the array job
+    Returns:
+        Dict[str, str]: Dictionary mapping task IDs to their state.
+    """
+    command = f"squeue -j {job_id} -o '%i %t' --noheader"
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    
+    # Split the output into lines
+    lines = result.stdout.strip().split('\n')
+    
+    states = {}
+    # Process each line (skip the header if present)
+    for line in lines:
+        if "PD" in line:
+            if "-" in line:
+                # many are waiting together
+                task_ids = line.split("_")[1].split()[0]
+                start_id = int(task_ids.split("-")[0][1:])
+                end_id = int(task_ids.split("-")[1][:-1])
+                for i in range(start_id, end_id+1):
+                    states[f"{job_id}_{i}"] = "PD"
+            elif "[" in line:
+                # one is waiting, but it is part of an array job
+                task_id = line.split("_")[1].split()[0][1:]
+                states[f"{job_id}_{task_id}"] = "PD"
+            else:
+                # one is waiting, but it is not part of an array job
+                task_id = line.split("_")[1].split()[0]
+                states[f"{job_id}_{task_id}"] = "PD"
+        else:
+            parts = line.split()
+            if len(parts) == 2:
+                full_job_id, state = parts
+                job_parts = full_job_id.split('_')
+                
+                if len(job_parts) > 1:
+                    formatted_job_id = f"{job_parts[0]}_{job_parts[1]}"
+                else:
+                    formatted_job_id = f"{job_parts[0]}_0"
+                states[formatted_job_id] = state
+    return states
 
 
-def submit_job_with_resubmission(
+def submit_array_with_dependencies(
+    main_job_name: str,
+    main_partition: str,
+    main_script_path: str,
+    array: str,
+    dependent_job_name: str,
+    dependent_partition: str,
+    dependent_script_path: str,
+    dependency_type: str = "afterany",
+    **kwargs
+) -> List[str]:
+    """Submit a job array and dependent jobs for each array task."""
+    main_job_id = submit_job(
+        job_name=main_job_name,
+        partition=main_partition,
+        script_path=main_script_path,
+        array=array,
+        **kwargs
+    )
+    
+    dependent_job_ids = []
+    array_size = int(array.split('-')[-1]) + 1
+    
+    for i in range(array_size):
+        dependency = f"{dependency_type}:{main_job_id}_{i}"
+        dependent_job_id = submit_job(
+            job_name=f"{dependent_job_name}_{i}",
+            partition=dependent_partition,
+            script_path=dependent_script_path,
+            dependency=dependency,
+            **kwargs
+        )
+        dependent_job_ids.append(dependent_job_id)
+    
+    return [main_job_id] + dependent_job_ids
+
+
+def submit_parametric_array_job(
     job_name: str,
     partition: str,
+    script_path: str,
     time_limit: str,
+    parameter_grid: Dict[str, List[Any]],
+    **kwargs
+):
+    """
+    Submit a parametric array job to SLURM.
+    
+    :param job_name: Name of the job
+    :param partition: SLURM partition to use
+    :param script_path: Path to the job script
+    :param time_limit: Time limit for each job in the array
+    :param parameter_grid: Dictionary of parameter names and their possible values
+    :param kwargs: Additional keyword arguments for job submission
+    :return: Job ID of the submitted array job and the submit function
+    """
+    # Generate all combinations of parameters
+    param_names = list(parameter_grid.keys())
+    param_values = list(itertools.product(*parameter_grid.values()))
+    
+    # Ensure the job_logs directory exists
+    os.makedirs('job_logs', exist_ok=True)
+    
+    # Generate a random 5-digit number for the file names
+    random_id = f"{random.randint(10000, 99999):05d}"
+    
+    # Create a temporary file to store parameter combinations
+    param_file = f"job_logs/job_params_{job_name}_{random_id}.txt"
+    with open(param_file, 'w') as f:
+        for i, combo in enumerate(param_values):
+            param_str = ' '.join(f'--{name} {value}' for name, value in zip(param_names, combo))
+            f.write(f"{param_str}\n")
+    
+    # Modify the script to read parameters from the file
+    modified_script = f"job_logs/job_script_{job_name}_{random_id}.sh"
+    with open(script_path, 'r') as original, open(modified_script, 'w') as modified:
+        modified.write("#!/bin/bash\n")
+        modified.write(f"PARAM_LINE=$(sed -n \"$((SLURM_ARRAY_TASK_ID + 1))\"p {param_file})\n")
+        modified.write("eval set -- $PARAM_LINE\n")
+        modified.write("while [ $# -gt 0 ]; do\n")
+        modified.write("    case \"$1\" in\n")
+        for param in param_names:
+            modified.write(f"        --{param}) {param.upper()}=\"$2\"; shift 2 ;;\n")
+        modified.write("        *) shift ;;\n")
+        modified.write("    esac\n")
+        modified.write("done\n\n")
+        modified.write(original.read())
+    
+    # Submit the array job
+    array_size = len(param_values) - 1  # Subtract 1 as SLURM array indices are 0-based
+
+    submit_fn = functools.partial(submit_job, 
+                      job_name=job_name, 
+                      partition=partition, 
+                      script_path=modified_script, 
+                      time_limit=time_limit, 
+                      **kwargs)
+    job_id = submit_fn(array=f"0-{array_size}")
+    return job_id, submit_fn
+
+def submit_parametric_array_with_resubmission(
+    job_name: str,
+    partition: str,
+    script_path: str,
+    time_limit: str,
+    parameter_grid: Dict[str, List[Any]],
     max_resubmissions: int = 3,
     **kwargs
-) -> None:
+) -> str:
     """
-    Submit a job with automatic resubmission if it exits prematurely.
+    Submit a parametric array job with automatic resubmission.
+    
+    :param job_name: Name of the job
+    :param partition: SLURM partition to use
+    :param script_path: Path to the job script
+    :param time_limit: Time limit for each job in the array
+    :param parameter_grid: Dictionary of parameter names and their possible values
+    :param max_resubmissions: Maximum number of resubmissions allowed
+    :param kwargs: Additional keyword arguments for job submission
+    :return: Job ID of the submitted array job
     """
-    ensure_directory_exists("job_logs")
-    script = submit_job(job_name=job_name, partition=partition, time=time_limit, **kwargs)
-    script_path = write_sbatch_script(script, job_name)
-    logger.info(f"Sbatch script written to: {script_path}")
-    
-    job_id = submit_job_to_slurm(script_path)
-    
-    # Rename the script file to include the job ID
-    new_script_path = f"job_logs/{job_name}_{job_id}_script.sh"
-    os.rename(script_path, new_script_path)
-    logger.info(f"Renamed script file to: {new_script_path}")
-    
-    log_file = f"job_logs/{job_name}_{job_id}_resubmission.log"
-    start_background_monitoring(new_script_path, time_limit, max_resubmissions, log_file, job_name)
+    job_id, submit_fn = submit_parametric_array_job(
+        job_name=job_name,
+        partition=partition,
+        script_path=script_path,
+        time_limit=time_limit,
+        parameter_grid=parameter_grid,
+        **kwargs
+    )
+    job_infos = get_array_job_info(job_id)
+    threads = []
+    for job_info in job_infos:
+        task_id = job_info.split("_")[1]
+        thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
+            job_id, task_id, time_limit, max_resubmissions, submit_fn))
+        thread.start()
+        threads.append(thread)
+    return job_id
