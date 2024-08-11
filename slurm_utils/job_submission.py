@@ -252,7 +252,8 @@ def submit_parametric_array_job(
     
     # Modify the script to read parameters from the file
     modified_script = f"job_logs/job_script_{job_name}_{random_id}.sh"
-    with open(script_path, 'r') as original, open(modified_script, 'w') as modified:
+
+    with open(modified_script, 'w') as modified:
         modified.write("#!/bin/bash\n")
         modified.write(f"PARAM_LINE=$(sed -n \"$((SLURM_ARRAY_TASK_ID + 1))\"p {param_file})\n")
         modified.write("eval set -- $PARAM_LINE\n")
@@ -263,7 +264,15 @@ def submit_parametric_array_job(
         modified.write("        *) shift ;;\n")
         modified.write("    esac\n")
         modified.write("done\n\n")
-        modified.write(original.read())
+        for param in param_names:
+            modified.write(f'export {param.upper()}="${param.upper()}"\n')
+        
+        module_path = script_path.replace('/', '.').replace('.py', '')
+        # load imports
+        modified.write(f"eval \"$(python -c 'from {module_path} import setup; print(setup())')\" \n")
+        # run
+        python_cmd = f"eval \"$(python -c 'from {module_path} import run; run()')\""
+        modified.write(python_cmd)
     
     # Submit the array job
     array_size = len(param_values) - 1  # Subtract 1 as SLURM array indices are 0-based
@@ -306,12 +315,12 @@ def submit_parametric_array_with_resubmission(
         parameter_grid=parameter_grid,
         **kwargs
     )
-    job_infos = get_array_job_info(job_id)
-    threads = []
-    for job_info in job_infos:
-        task_id = job_info.split("_")[1]
-        thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
-            job_id, task_id, time_limit, max_resubmissions, submit_fn))
-        thread.start()
-        threads.append(thread)
+    # job_infos = get_array_job_info(job_id)
+    # threads = []
+    # for job_info in job_infos:
+    #     task_id = job_info.split("_")[1]
+    #     thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
+    #         job_id, task_id, time_limit, max_resubmissions, submit_fn))
+    #     thread.start()
+    #     threads.append(thread)
     return job_id
