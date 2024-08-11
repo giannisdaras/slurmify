@@ -1,6 +1,6 @@
-# 🚀 SLURM Utils: Python Library to ease your SLURM Workflow! 🚀
+# 🚀 slurmify: A Python Library to ease your SLURM Workflow! 🚀
 
-Welcome to SLURM Utils, a python library for managing SLURM jobs with style and efficiency! 🎉
+Welcome to slurmify, a python library for managing SLURM jobs with style and efficiency! 🎉
 
 ## 🌟 Features
 
@@ -11,7 +11,7 @@ Welcome to SLURM Utils, a python library for managing SLURM jobs with style and 
 ## 🛠 Installation
 
 ```bash
-pip install slurm-utils
+pip install slurmify
 ```
 
 ## 🚀 Quick Start
@@ -19,7 +19,7 @@ pip install slurm-utils
 Here's a taste of what SLURM Utils can do:
 
 ```bash
-slurm_utils submit-parametric-array \
+slurmify submit-parametric-array \
   --job-name awesome_experiment \
   --script-path examples/run_experiment.py \
   --time-limit 01:00:00 \
@@ -33,10 +33,10 @@ slurm_utils submit-parametric-array \
 
 1. Create your Python script (`run_experiment.py`) with two essential functions:
 
-   - `setup()`: Prepare your environment
-   - `run()`: Define your experiment logic
+   - `setup()`: Prepare your environment. This should be a function that returns a string with the setup commands.
+   - `run()`: Define your experiment logic. This should be a function that returns a string with the command to run your experiment.
 
-2. SLURM Utils takes care of the rest! It creates a parametric array job, manages submissions, and handles resubmissions if needed.
+2. smurmify takes care of the rest! It creates a parametric array job, manages submissions, and handles resubmissions if needed.
 
 ## 🎭 Example Script
 
