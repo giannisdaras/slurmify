@@ -12,6 +12,7 @@ import random
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
 def submit_job(
     job_name: str,
     partition: str,
@@ -315,12 +316,12 @@ def submit_parametric_array_with_resubmission(
         parameter_grid=parameter_grid,
         **kwargs
     )
-    # job_infos = get_array_job_info(job_id)
-    # threads = []
-    # for job_info in job_infos:
-    #     task_id = job_info.split("_")[1]
-    #     thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
-    #         job_id, task_id, time_limit, max_resubmissions, submit_fn))
-    #     thread.start()
-    #     threads.append(thread)
+     job_infos = get_array_job_info(job_id)
+     threads = []
+     for job_info in job_infos:
+         task_id = job_info.split("_")[1]
+         thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
+             job_id, task_id, time_limit, max_resubmissions, submit_fn))
+         thread.start()
+         threads.append(thread)
     return job_id
