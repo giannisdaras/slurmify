@@ -1,6 +1,6 @@
 import click
 import ast
-from slurm_utils import job_submission
+from slurmify import job_submission
 
 @click.group()
 def main():
