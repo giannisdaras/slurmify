@@ -120,11 +120,11 @@ def monitor_and_resubmit_job(job_id: int, task_id: int, time_limit: str, max_res
     while resubmissions <= max_resubmissions:
         start_time = time.time()
         while True:
-            time.sleep(5)
+            time.sleep(30) # Check every 30 seconds
             elapsed_time = time.time() - start_time
             job_state = get_job_state(f"{job_id}_{task_id}")
             if job_state != "RUNNING":  
-                if elapsed_time < time_limit_seconds and job_state != "COMPLETED":
+                if elapsed_time < time_limit_seconds and job_state != "COMPLETED" and job_state != "PENDING":
                     logger.info(f"Job {job_id}, Task id {task_id} ended prematurely. Resubmitting (attempt {resubmissions}).")
                     job_id = submit_fn(array=f"{task_id}-{task_id}")
                     logger.info(f"Job submitted with ID: {job_id}")
