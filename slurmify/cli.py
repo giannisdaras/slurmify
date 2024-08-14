@@ -26,45 +26,6 @@ def submit(**kwargs):
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
 
-@main.command()
-@click.option('--job-name', required=True, help='Name of the job')
-@click.option('--partition', required=True, help='Partition (queue) name')
-@click.option('--script-path', required=True, type=click.Path(exists=True), help='Path to the job script')
-@click.option('--time-limit', required=True, help='Time limit for the job')
-@click.option('--max-resubmissions', default=3, type=int, help='Maximum number of resubmissions allowed')
-@click.option('--nodes', default=1, type=int, help='Number of nodes')
-@click.option('--ntasks-per-node', default=1, type=int, help='Number of tasks per node')
-@click.option('--cpus-per-task', default=1, type=int, help='Number of CPUs per task')
-@click.option('--mem', default='0', help='Memory allocation')
-@click.option('--array', help='Job array specification (e.g., "0-15" or "0-15%4")', default="0-1")
-@click.option('--dependency', help='Job dependency specification')
-def submit_with_resubmission(**kwargs):
-    """Submit a job to SLURM with automatic resubmission"""
-    job_id = job_submission.submit_job_with_resubmission(**kwargs)
-    try:
-        click.echo(f"Submitted job with resubmission. Initial job ID: {job_id}")
-    except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
-
-@main.command()
-@click.option('--job-name', required=True, help='Name of the job')
-@click.option('--partition', required=True, help='Partition (queue) name')
-@click.option('--script-path', required=True, type=click.Path(exists=True), help='Path to the job script')
-@click.option('--array', required=True, help='Range for the job array (e.g., "0-15" or "0-15%4")')
-@click.option('--time-limit', required=True, help='Time limit for the job')
-@click.option('--max-resubmissions', default=3, type=int, help='Maximum number of resubmissions allowed')
-@click.option('--nodes', default=1, type=int, help='Number of nodes')
-@click.option('--ntasks-per-node', default=1, type=int, help='Number of tasks per node')
-@click.option('--cpus-per-task', default=1, type=int, help='Number of CPUs per task')
-@click.option('--mem', default='0', help='Memory allocation')
-@click.option('--dependency', help='Job dependency specification')
-def submit_array_with_resubmission(**kwargs):
-    """Submit a job array to SLURM with automatic resubmission"""
-    try:
-        job_id = job_submission.submit_array_with_resubmission(**kwargs)
-        click.echo(f"Submitted job array with resubmission. Initial job ID: {job_id}")
-    except Exception as e:
-        click.echo(f"Error: {str(e)}", err=True)
 
 @main.command()
 @click.option('--main-job-name', required=True, help='Name of the main job array')
@@ -120,19 +81,6 @@ def submit_parametric_array(**kwargs):
         click.echo(f"Submitted parametric array job with resubmission. Initial job ID: {job_id}")
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
-
-
-@main.command()
-@click.option('--script-path', required=True, help='Path to the sbatch script file')
-@click.option('--partition', required=True, help='Partition (queue) name')
-@click.option('--time-limit', required=True, help='Time limit of the job')
-@click.option('--max-resubmissions', required=True, type=int, help='Maximum number of resubmissions allowed')
-@click.option('--job-name', required=True, help='Name of the job')
-@click.option('--job-id', required=True, help='Name of the job')
-@click.option('--array', help='Range for the job array (e.g., "0-15" or "0-15%4")')
-def background_monitor(**kwargs):
-    """Run the background monitoring process"""
-    job_submission.background_monitor(**kwargs)
 
 if __name__ == "__main__":
     main()
