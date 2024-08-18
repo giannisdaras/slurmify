@@ -8,10 +8,9 @@ import functools
 from typing import Dict, Any, Optional, List, Union, Tuple
 import threading
 import random
-
+import math
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
 
 def submit_job(
     job_name: str,
@@ -224,6 +223,7 @@ def submit_parametric_array_job(
     script_path: str,
     time_limit: str,
     parameter_grid: Dict[str, List[Any]],
+    array: Optional[str] = None,
     **kwargs
 ):
     """
@@ -234,6 +234,7 @@ def submit_parametric_array_job(
     :param script_path: Path to the job script
     :param time_limit: Time limit for each job in the array
     :param parameter_grid: Dictionary of parameter names and their possible values
+    :param array: Array specification (e.g., "0-15" or "0,1,2,5-8")
     :param kwargs: Additional keyword arguments for job submission
     :return: Job ID of the submitted array job and the submit function
     """
@@ -279,7 +280,7 @@ def submit_parametric_array_job(
         modified.write(python_cmd)
     
     # Submit the array job
-    array_size = len(param_values) - 1  # Subtract 1 as SLURM array indices are 0-based
+    array_size = len(param_values) - 1 if array is None else array  # Use provided array if available
 
     submit_fn = functools.partial(submit_job, 
                       job_name=job_name, 
@@ -287,8 +288,48 @@ def submit_parametric_array_job(
                       script_path=modified_script, 
                       time_limit=time_limit, 
                       **kwargs)
-    job_id = submit_fn(array=f"0-{array_size}")
+    job_id = submit_fn(array=array_size)
     return job_id, submit_fn
+
+
+def get_qos_limits(partition: str) -> Dict[str, int]:
+    """Get QOS limits for the given partition."""
+    try:
+        result = subprocess.run(['scontrol', 'show', 'partition', partition], capture_output=True, text=True, check=True)
+        qos_name = None
+        for line in result.stdout.split('\n'):
+            if 'QoS=' in line:
+                qos_name = line.split('QoS=')[1].strip()
+                break
+        
+        if not qos_name:
+            logger.warning(f"QoS not found for partition {partition}")
+            return {}
+        
+        result = subprocess.run(['sacctmgr', 'show', 'qos', qos_name, 'format=MaxSubmitJobsPerUser,MaxJobsPerUser', '--noheader'], capture_output=True, text=True, check=True)
+        limits = result.stdout.strip().split()
+        return {
+            'MaxSubmitJobsPerUser': int(limits[0]),
+            'MaxJobsPerUser': int(limits[1])
+        }
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error getting QoS limits: {e}")
+        return {}
+
+def split_array(array_spec: str, max_size: int) -> List[str]:
+    """Split an array specification into subarrays of maximum size."""
+    start, end = map(int, array_spec.split('-'))
+    total_size = end - start + 1
+    num_subarrays = math.ceil(total_size / max_size)
+    
+    subarrays = []
+    for i in range(num_subarrays):
+        subarray_start = start + i * max_size
+        subarray_end = min(subarray_start + max_size - 1, end)
+        subarrays.append(f"{subarray_start}-{subarray_end}")
+    
+    return subarrays
+
 
 def submit_parametric_array_with_resubmission(
     job_name: str,
@@ -298,9 +339,9 @@ def submit_parametric_array_with_resubmission(
     parameter_grid: Dict[str, List[Any]],
     max_resubmissions: int = 3,
     **kwargs
-) -> str:
+) -> List[str]:
     """
-    Submit a parametric array job with automatic resubmission.
+    Submit a parametric array job with automatic resubmission and subarray splitting.
     
     :param job_name: Name of the job
     :param partition: SLURM partition to use
@@ -309,22 +350,46 @@ def submit_parametric_array_with_resubmission(
     :param parameter_grid: Dictionary of parameter names and their possible values
     :param max_resubmissions: Maximum number of resubmissions allowed
     :param kwargs: Additional keyword arguments for job submission
-    :return: Job ID of the submitted array job
+    :return: List of Job IDs of the submitted array jobs
     """
-    job_id, submit_fn = submit_parametric_array_job(
-        job_name=job_name,
-        partition=partition,
-        script_path=script_path,
-        time_limit=time_limit,
-        parameter_grid=parameter_grid,
-        **kwargs
-    )
-    job_infos = get_array_job_info(job_id)
-    threads = []
-    for job_info in job_infos:
-        task_id = job_info.split("_")[1]
-        thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
-            job_id, task_id, time_limit, max_resubmissions, submit_fn))
-        thread.start()
-        threads.append(thread)
-    return job_id
+    # Calculate total number of combinations
+    total_combinations = 1
+    for values in parameter_grid.values():
+        total_combinations *= len(values)
+    array_size = total_combinations - 1  # Subtract 1 as SLURM array indices are 0-based
+
+    # Get QoS limits
+    qos_limits = get_qos_limits(partition)
+    max_array_size = min(qos_limits.get('MaxSubmitJobsPerUser', array_size), 
+                         qos_limits.get('MaxJobsPerUser', array_size))
+
+    if max_array_size <= 0:
+        logger.warning(f"Could not determine QoS limits for partition {partition}. Submitting as a single array job.")
+        max_array_size = array_size
+
+    # Split the array if necessary
+    subarrays = split_array(f"0-{array_size}", max_array_size)
+    job_ids = []
+    for i, subarray in enumerate(subarrays):
+        sub_job_name = f"{job_name}_part{i+1}"        
+        job_id, submit_fn = submit_parametric_array_job(
+            job_name=sub_job_name,
+            partition=partition,
+            script_path=script_path,
+            time_limit=time_limit,
+            parameter_grid=parameter_grid,
+            array=subarray,
+            **kwargs
+        )
+        job_ids.append(job_id)
+        
+        job_infos = get_array_job_info(job_id)
+        threads = []
+        for job_info in job_infos:
+            task_id = job_info.split("_")[1]
+            thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
+                job_id, task_id, time_limit, max_resubmissions, submit_fn))
+            thread.start()
+            threads.append(thread)
+    
+    return job_ids
