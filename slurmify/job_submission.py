@@ -220,6 +220,7 @@ def submit_array_with_dependencies(
 def submit_parametric_array_job(
     job_name: str,
     partition: str,
+    account: str,
     script_path: str,
     time_limit: str,
     parameter_grid: Dict[str, List[Any]],
@@ -285,6 +286,7 @@ def submit_parametric_array_job(
     submit_fn = functools.partial(submit_job, 
                       job_name=job_name, 
                       partition=partition, 
+                      account=account,
                       script_path=modified_script, 
                       time_limit=time_limit, 
                       **kwargs)

@@ -54,6 +54,7 @@ def submit_array_with_deps(**kwargs):
 @main.command()
 @click.option('--job-name', required=True, help='Name of the job')
 @click.option('--partition', required=True, help='Partition (queue) name')
+@click.option('--account', required=False, help='Account name', default=None)
 @click.option('--script-path', required=True, type=click.Path(exists=True), help='Path to the job script')
 @click.option('--time-limit', required=True, help='Time limit for the job')
 @click.option('--parameter', required=True, multiple=True, help='Parameter in the format name:value1,value2,value3')
