@@ -130,6 +130,7 @@ def monitor_and_resubmit_job(job_id: int, task_id: int, time_limit: str, max_res
                     logger.info(f"Job {job_id}, Task id {task_id} ended prematurely. Resubmitting (attempt {resubmissions}).")
                     job_id = submit_fn(array=f"{task_id}-{task_id}")
                     logger.info(f"Job submitted with ID: {job_id}")
+                    resubmissions += 1
                 else:
                     logger.info(f"Job {job_id}, Task id {task_id} finished normally")
                     return
@@ -297,7 +298,7 @@ def submit_parametric_array_job(
 def get_qos_limits(partition: str) -> Dict[str, int]:
     """Get QOS limits for the given partition."""
     try:
-        result = subprocess.run(['scontrol', 'show', 'partition', partition], capture_output=True, text=True, check=True)
+        result = subprocess.run(['scontrol', 'show', 'partition', partition, '-a'], capture_output=True, text=True, check=True)
         qos_name = None
         for line in result.stdout.split('\n'):
             if 'QoS=' in line:
@@ -385,13 +386,14 @@ def submit_parametric_array_with_resubmission(
         )
         job_ids.append(job_id)
         
-        job_infos = get_array_job_info(job_id)
-        threads = []
-        for job_info in job_infos:
-            task_id = job_info.split("_")[1]
-            thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
-                job_id, task_id, time_limit, max_resubmissions, submit_fn))
-            thread.start()
-            threads.append(thread)
-    
+        if max_resubmissions > 0:
+            job_infos = get_array_job_info(job_id)
+            threads = []
+            for job_info in job_infos:
+                task_id = job_info.split("_")[1]
+                thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
+                    job_id, task_id, time_limit, max_resubmissions, submit_fn))
+                thread.start()
+                threads.append(thread)
+        
     return job_ids
