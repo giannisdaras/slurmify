@@ -12,6 +12,22 @@ import math
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def expand_ranges(input_string):
+    result = []
+    parts = input_string.split(',')
+    
+    for unprocessed_part in parts:
+        part = unprocessed_part.replace("[", "")
+        part = part.replace("]", "")
+        if '-' in part:
+            start, end = map(int, part.split('-'))
+            result.extend(range(start, end + 1))
+        else:
+            result.append(int(part))
+    
+    return ','.join(map(str, result))
+
 def submit_job(
     job_name: str,
     partition: str,
@@ -26,6 +42,7 @@ def submit_job(
     mem: str = "0",
     array: Optional[str] = None,
     dependency: Optional[str] = None,
+    check_worthiness: bool = False,
     additional_params: Optional[Dict[str, Any]] = None
 ) -> str:
     """Submit a job to SLURM."""
@@ -54,9 +71,9 @@ def submit_job(
         for key, value in additional_params.items():
             sbatch_options.append(f"--{key}={value}")
 
-    return _submit_job_to_slurm(script_path, sbatch_options)
+    return _submit_job(script_path, sbatch_options, check_worthiness)
 
-def _submit_job_to_slurm(script_path: str, sbatch_options: List[str]) -> str:
+def _submit_job(script_path: str, sbatch_options: List[str], check_worthiness: bool=False) -> str:
     """Submit the job script to SLURM and return the job ID."""
     logger.info(f"Submitting job script: {script_path}")
     
@@ -67,7 +84,44 @@ def _submit_job_to_slurm(script_path: str, sbatch_options: List[str]) -> str:
         if not os.access(script_path, os.R_OK):
             raise PermissionError(f"Script file is not readable: {script_path}")
         while True:
+
             try:
+                # first run it without sbatch to see if there is actually anything worth running
+                # run first with bash instead of sbatch to check if there are some array indices that are not worth running
+                # Create a copy of the current environment
+                env = os.environ.copy()
+                
+                if check_worthiness:
+                    valid_indices = []
+                    sbatch_array_index = None
+
+                    # find the location of the array option
+                    for i, option in enumerate(sbatch_options):
+                        if "--array" in option:
+                            sbatch_array_index = i
+                            break
+                    
+                    if sbatch_array_index is not None:
+                        # find numerical values in array
+                        array_range = sbatch_options[sbatch_array_index].split("=")[1]
+                        expanded_array_range = expand_ranges(array_range)
+                        logger.info(f"Found the following array indices {expanded_array_range}")
+                        logger.info("Will try to find valid indices by performing dry runs.")
+                        for i in expanded_array_range.split(","):
+                            env['SLURM_ARRAY_TASK_ID'] = str(i)
+                            env['DRY_RUN'] = "1"
+                            result = subprocess.run(["bash", script_path], capture_output=True, text=True, check=True, env=env)
+                            if "abort" not in result.stdout.lower():
+                                logger.info(f"Array index {i} is worth running.")
+                                valid_indices.append(i)
+                            else:
+                                logger.info(f"Array index {i} is not worth running.")                    
+                        
+                        # modify the array option to only include valid indices
+                        sbatch_options[sbatch_array_index] = f"--array={','.join(map(str, set(valid_indices)))}"
+                        logger.info(f"Submitting job with valid indices: {set(valid_indices)}")
+
+                logger.info(f"sbatch command: {' '.join(['sbatch'] + sbatch_options + [script_path])}")
                 cmd = ["sbatch"] + sbatch_options + [script_path]
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True)
                 logger.info(f"Job submission output: {result.stdout}")
@@ -161,11 +215,11 @@ def get_array_job_info(job_id: int) -> Dict[str, str]:
                     states[f"{job_id}_{i}"] = "PD"
             elif "[" in line:
                 # one is waiting, but it is part of an array job
-                task_id = line.split("_")[1].split()[0][1:]
+                task_id = line.split("_")[1].split()[0][1:].replace("]", "").replace("[", "")
                 states[f"{job_id}_{task_id}"] = "PD"
             else:
                 # one is waiting, but it is not part of an array job
-                task_id = line.split("_")[1].split()[0]
+                task_id = line.split("_")[1].split()[0].replace("]", "").replace("[", "")
                 states[f"{job_id}_{task_id}"] = "PD"
         else:
             parts = line.split()
@@ -181,41 +235,6 @@ def get_array_job_info(job_id: int) -> Dict[str, str]:
     return states
 
 
-def submit_array_with_dependencies(
-    main_job_name: str,
-    main_partition: str,
-    main_script_path: str,
-    array: str,
-    dependent_job_name: str,
-    dependent_partition: str,
-    dependent_script_path: str,
-    dependency_type: str = "afterany",
-    **kwargs
-) -> List[str]:
-    """Submit a job array and dependent jobs for each array task."""
-    main_job_id = submit_job(
-        job_name=main_job_name,
-        partition=main_partition,
-        script_path=main_script_path,
-        array=array,
-        **kwargs
-    )
-    
-    dependent_job_ids = []
-    array_size = int(array.split('-')[-1]) + 1
-    
-    for i in range(array_size):
-        dependency = f"{dependency_type}:{main_job_id}_{i}"
-        dependent_job_id = submit_job(
-            job_name=f"{dependent_job_name}_{i}",
-            partition=dependent_partition,
-            script_path=dependent_script_path,
-            dependency=dependency,
-            **kwargs
-        )
-        dependent_job_ids.append(dependent_job_id)
-    
-    return [main_job_id] + dependent_job_ids
 
 
 def submit_parametric_array_job(
@@ -383,14 +402,16 @@ def submit_parametric_array_with_resubmission(
             parameter_grid=parameter_grid,
             array=subarray,
             **kwargs
-        )
+        )        
         job_ids.append(job_id)
         
+
         if max_resubmissions > 0:
             job_infos = get_array_job_info(job_id)
             threads = []
             for job_info in job_infos:
                 task_id = job_info.split("_")[1]
+                logger.info(f"Monitoring job {job_id} with task id {task_id} has started.")
                 thread = threading.Thread(target=functools.partial(monitor_and_resubmit_job,
                     job_id, task_id, time_limit, max_resubmissions, submit_fn))
                 thread.start()
