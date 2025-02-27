@@ -123,6 +123,12 @@ def _submit_job(script_path: str, sbatch_options: List[str], check_worthiness: b
 
                 logger.info(f"sbatch command: {' '.join(['sbatch'] + sbatch_options + [script_path])}")
                 cmd = ["sbatch"] + sbatch_options + [script_path]
+                # Add execute permissions to script file
+                os.chmod(script_path, os.stat(script_path).st_mode | 0o111)
+
+                # srun_command = ["srun"] + [opt for opt in sbatch_options if "--array" not in opt] + [script_path]
+                # logger.info(f"srun command: {' '.join(srun_command)}")
+                
                 result = subprocess.run(cmd, capture_output=True, text=True, check=True)
                 logger.info(f"Job submission output: {result.stdout}")
                 return result.stdout.strip().split()[-1]
