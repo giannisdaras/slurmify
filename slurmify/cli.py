@@ -15,7 +15,7 @@ def main():
 @click.option('--account', required=False, help='Account name', default=None)
 @click.option('--script-path', required=True, type=click.Path(exists=True), help='Path to the job script')
 @click.option('--time-limit', required=True, help='Time limit for the job')
-@click.option('--parameter', required=True, multiple=True, help='Parameter in the format name:value1,value2,value3 or name:value')
+@click.option('--parameter', required=False, multiple=True, help='Parameter in the format name:value1,value2,value3 or name:value')
 @click.option('--max-resubmissions', default=3, type=int, help='Maximum number of resubmissions allowed')
 @click.option('--nodes', default=1, type=int, help='Number of nodes')
 @click.option('--ntasks-per-node', default=1, type=int, help='Number of tasks per node')
