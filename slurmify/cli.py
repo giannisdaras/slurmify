@@ -23,6 +23,12 @@ def main():
 @click.option('--mem', default='0', help='Memory allocation')
 @click.option('--dependency', help='Job dependency specification')
 @click.option('--check_worthiness', default=False, type=bool, help='Check if the job is worth running')
+@click.option('--exclude', default=None, help='SLURM exclude nodelist, passed through to sbatch as --exclude=...')
+@click.option(
+    '--sbatch-option',
+    multiple=True,
+    help='Extra sbatch option as key=value (e.g. --sbatch-option gres=gpu:8 adds --gres=gpu:8)',
+)
 def submit_parametric_array(**kwargs):
     """Submit a parametric array job to SLURM with automatic resubmission"""
     parameter_grid = {}
@@ -31,10 +37,28 @@ def submit_parametric_array(**kwargs):
         if ',' in values:
             try:
                 parameter_grid[name] = ast.literal_eval(values)
-            except:
+            except Exception:
                 parameter_grid[name] = values.split(',')
         else:
             parameter_grid[name] = [values]
+
+    # Collect extra sbatch options into additional_params so they flow through
+    # submit_parametric_array_with_resubmission -> submit_parametric_array_job -> submit_job.
+    additional_params = {}
+
+    exclude = kwargs.pop('exclude', None)
+    if exclude:
+        additional_params['exclude'] = exclude
+
+    for kv in kwargs.pop('sbatch_option', ()):
+        # ignore malformed entries rather than crashing the CLI
+        if '=' not in kv:
+            continue
+        key, value = kv.split('=', 1)
+        additional_params[key] = value
+
+    if additional_params:
+        kwargs['additional_params'] = additional_params
 
     try:
         job_id = job_submission.submit_parametric_array_with_resubmission(
